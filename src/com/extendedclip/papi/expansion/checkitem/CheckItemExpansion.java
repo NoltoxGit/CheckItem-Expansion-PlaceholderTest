@@ -902,7 +902,7 @@ public class CheckItemExpansion extends PlaceholderExpansion implements Configur
             return;
         }
 
-        // amtexpr: - internal expression system, also supports {math_dec:fallback_expr}
+        // amtexpr: - internal expression system, also supports {cmi_equationint_dec:fallback_expr}
         if (part.startsWith("amtexpr:")) {
             String rawExpr = part.substring(8).trim();
             // First resolve placeholders that are already PAPI-style
@@ -911,14 +911,14 @@ public class CheckItemExpansion extends PlaceholderExpansion implements Configur
             int amount = -1;
             boolean valid = true;
 
-            if (rawExpr.startsWith("{math_") && rawExpr.endsWith("}")) {
-                // Pattern: {math_<dec>:<fallback>_<expression-with-placeholders>}
+            if (rawExpr.startsWith("{cmi_equationint_") && rawExpr.endsWith("}")) {
+                // Pattern: {cmi_equationint_<dec>:<fallback>_<expression-with-placeholders>}
                 String inner = rawExpr.substring(1, rawExpr.length() - 1); // remove {}
                 // Replace nested {placeholder} inside expression body to %placeholder%
                 inner = inner.replaceAll("\\{([a-zA-Z0-9_:\\-]+)\\}", "%$1%");
-                // Split header math_
-                if (inner.startsWith("math_")) {
-                    String spec = inner.substring("math_".length());
+                // Split header cmi_equationint_
+                if (inner.startsWith("cmi_equationint_")) {
+                    String spec = inner.substring("cmi_equationint_".length());
                     int firstColon = spec.indexOf(':');
                     int firstUnd = spec.indexOf('_');
                     if (firstColon > 0 && firstUnd > firstColon) {
