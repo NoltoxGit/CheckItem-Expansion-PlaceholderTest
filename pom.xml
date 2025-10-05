@@ -37,6 +37,10 @@
                     <release>21</release>
                     <encoding>UTF-8</encoding>
                     <parameters>true</parameters>
+                    <compilerArgs>
+                        <arg>-Xlint:deprecation</arg>
+                        <arg>-Xlint:unchecked</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
 

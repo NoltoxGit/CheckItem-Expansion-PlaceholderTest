@@ -12,7 +12,7 @@
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
-      <module name="Expansion-CheckItem" options="-parameters" />
+      <module name="Expansion-CheckItem" options="-parameters -Xlint:deprecation -Xlint:unchecked" />
     </option>
   </component>
 </project>
