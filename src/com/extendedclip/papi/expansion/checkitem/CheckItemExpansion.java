@@ -111,6 +111,8 @@ public class CheckItemExpansion extends PlaceholderExpansion implements Configur
         private boolean isStrict;
         private boolean remove;
 
+        private boolean amountValid = true; // NEW: validity of parsed amount (amtexpr)
+
         private String material;
         private short data;
         private int customData;
@@ -136,6 +138,8 @@ public class CheckItemExpansion extends PlaceholderExpansion implements Configur
         protected void setCustomData(int customData) { this.customData = customData; }
         public int getAmount() { return amount; }
         protected void setAmount(int amount) { this.amount = amount; }
+        public boolean isAmountValid() { return amountValid; }
+        protected void setAmountValid(boolean valid) { this.amountValid = valid; }
         public String getName() { return name; }
         protected void setName(String name) { this.name = name; }
         public String getLore() { return lore; }
@@ -587,6 +591,15 @@ public class CheckItemExpansion extends PlaceholderExpansion implements Configur
     }
 
     private boolean checkItem(ItemWrapper wrapper, Player p, ItemStack... items) {
+        // NEW: invalid amount => fail
+        if (wrapper.shouldCheckAmount() && !wrapper.isAmountValid()) {
+            return false;
+        }
+        // Remove mode with amount <=0 => fail
+        if (wrapper.shouldRemove() && wrapper.shouldCheckAmount() && wrapper.getAmount() <= 0) {
+            return false;
+        }
+
         int total = getItemAmount(wrapper, p, items);
         if (wrapper.shouldCheckAmount()) {
             return wrapper.isStrict() ? total == wrapper.getAmount() : total >= wrapper.getAmount();
@@ -889,15 +902,87 @@ public class CheckItemExpansion extends PlaceholderExpansion implements Configur
             return;
         }
 
-        // NEW: arithmetic expression for amount
+        // amtexpr: - internal expression system, also supports {math_dec:fallback_expr}
         if (part.startsWith("amtexpr:")) {
-            String expr = resolveAllPlaceholders(p, part.substring(8));
-            // Optionnel: convert {placeholder} restants en %placeholder% si besoin:
-            // expr = expr.replaceAll("\\{([a-zA-Z0-9_:\\-]+)\\}", "%$1%");
-            expr = resolveAllPlaceholders(p, expr);
-            int result = evalExpression(expr);
-            if (result < 0) result = 0;
-            wrapper.setAmount(result);
+            String rawExpr = part.substring(8).trim();
+            // First resolve placeholders that are already PAPI-style
+            rawExpr = resolveAllPlaceholders(p, rawExpr);
+
+            int amount = -1;
+            boolean valid = true;
+
+            if (rawExpr.startsWith("{math_") && rawExpr.endsWith("}")) {
+                // Pattern: {math_<dec>:<fallback>_<expression-with-placeholders>}
+                String inner = rawExpr.substring(1, rawExpr.length() - 1); // remove {}
+                // Replace nested {placeholder} inside expression body to %placeholder%
+                inner = inner.replaceAll("\\{([a-zA-Z0-9_:\\-]+)\\}", "%$1%");
+                // Split header math_
+                if (inner.startsWith("math_")) {
+                    String spec = inner.substring("math_".length());
+                    int firstColon = spec.indexOf(':');
+                    int firstUnd = spec.indexOf('_');
+                    if (firstColon > 0 && firstUnd > firstColon) {
+                        String decimalsStr = spec.substring(0, firstColon);
+                        String fallbackAndExpr = spec.substring(firstColon + 1);
+                        int secondUnd = fallbackAndExpr.indexOf('_');
+                        if (secondUnd > 0) {
+                            String fallbackStr = fallbackAndExpr.substring(0, secondUnd);
+                            String exprBody = fallbackAndExpr.substring(secondUnd + 1);
+
+                            // Resolve placeholders inside exprBody
+                            exprBody = resolveAllPlaceholders(p, exprBody);
+
+                            int fallbackVal = getInt(fallbackStr);
+                            if (fallbackVal < 0) fallbackVal = 0;
+
+                            int decimals;
+                            try {
+                                decimals = Integer.parseInt(decimalsStr);
+                            } catch (NumberFormatException e) {
+                                decimals = 0;
+                            }
+
+                            // Evaluate expression body with internal parser
+                            int eval = evalExpression(exprBody);
+                            if (eval < 0) {
+                                amount = fallbackVal;
+                            } else {
+                                amount = eval;
+                            }
+                            // decimals ignored (we floor anyway)
+                        } else {
+                            valid = false;
+                        }
+                    } else {
+                        valid = false;
+                    }
+                } else {
+                    valid = false;
+                }
+            } else {
+                // Plain arithmetic expression path
+                String expr = rawExpr;
+                // Convert lone {identifier} (not already percent) into %identifier%
+                expr = expr.replaceAll("\\{([a-zA-Z0-9_:\\-]+)\\}", "%$1%");
+                expr = resolveAllPlaceholders(p, expr);
+                amount = evalExpression(expr);
+                if (amount < 0) {
+                    valid = false;
+                }
+            }
+
+            if (!valid) {
+                wrapper.setAmount(0);
+                wrapper.setAmountValid(false);
+            } else {
+                if (amount < 0) {
+                    wrapper.setAmount(0);
+                    wrapper.setAmountValid(false);
+                } else {
+                    wrapper.setAmount(amount);
+                    wrapper.setAmountValid(true);
+                }
+            }
             wrapper.setCheckAmount(true);
             return;
         }
@@ -908,10 +993,11 @@ public class CheckItemExpansion extends PlaceholderExpansion implements Configur
             if (parsed >= 0) {
                 wrapper.setAmount(parsed);
                 wrapper.setCheckAmount(true);
+                wrapper.setAmountValid(true);
             } else {
-                // Sécurité : si amount invalide on ne retire rien
                 wrapper.setAmount(0);
                 wrapper.setCheckAmount(true);
+                wrapper.setAmountValid(false);
             }
             return;
         }
@@ -1113,10 +1199,8 @@ public class CheckItemExpansion extends PlaceholderExpansion implements Configur
         return p.getInventory().getContents();
     }
 
-    /* =========================================================
-       Expression evaluator for amtexpr:
-       Supports + - * / parentheses and unary +/-
-       ========================================================= */
+    /* ============== Expression Evaluator (internal) ============== */
+
     private int evalExpression(String expr) {
         if (expr == null) return -1;
         expr = expr.replaceAll("\\s+", "");
@@ -1125,7 +1209,6 @@ public class CheckItemExpansion extends PlaceholderExpansion implements Configur
             double val = parseExpr(new TokenStream(expr));
             if (Double.isNaN(val) || Double.isInfinite(val)) return -1;
             if (val < 0) val = 0;
-            // Floor (you can change to round if preferred)
             return (int) Math.floor(val);
         } catch (Exception e) {
             return -1;
